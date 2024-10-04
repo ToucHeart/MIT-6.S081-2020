@@ -30,16 +30,6 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
   }
   kvminithart();
 }
@@ -85,6 +75,42 @@ allocpid() {
   return pid;
 }
 
+extern char etext[]; // kernel.ld sets this to end of kernel code.
+
+extern char trampoline[]; // trampoline.S
+
+static pagetable_t proc_kernel_page_table(struct proc*cur_proc){
+
+  pagetable_t p = (pagetable_t)kalloc();
+  if(p == 0){
+    return 0;
+  }
+
+  memset(p, 0, PGSIZE);
+
+  mappages(p, UART0, PGSIZE, UART0, PTE_R | PTE_W);
+
+  mappages(p, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
+
+  mappages(p, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
+
+  mappages(p, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
+
+  mappages(p, KERNBASE, (uint64)etext - KERNBASE, KERNBASE, PTE_R | PTE_X);
+
+  mappages(p, (uint64)etext, PHYSTOP - (uint64)etext, (uint64)etext, PTE_R | PTE_W);
+
+  mappages(p, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
+
+  char *pa = kalloc();
+  if (pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int)(cur_proc - proc));
+  mappages(p, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+  cur_proc->kstack = va;
+
+  return p;
+}
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -121,6 +147,13 @@ found:
     return 0;
   }
 
+  p->kernel_page_table = proc_kernel_page_table(p);
+  if(p->kernel_page_table==0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -128,6 +161,25 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   return p;
+}
+
+void proc_free_kernel_page_table(pagetable_t cur_kernel_page_table)
+{
+  uvmunmap(cur_kernel_page_table, UART0, 1, 0);
+
+  uvmunmap(cur_kernel_page_table, VIRTIO0, 1, 0);
+
+  uvmunmap(cur_kernel_page_table, CLINT, 0x10000 / PGSIZE, 0);
+
+  uvmunmap(cur_kernel_page_table, PLIC, 0x400000 / PGSIZE, 0);
+
+  uvmunmap(cur_kernel_page_table, KERNBASE, ((uint64)etext - KERNBASE) / PGSIZE, 0);
+
+  uvmunmap(cur_kernel_page_table, PGROUNDDOWN((uint64)etext), (PHYSTOP - (uint64)etext) / PGSIZE, 0);
+
+  uvmunmap(cur_kernel_page_table, TRAMPOLINE, 1, 0);
+
+  uvmfree(cur_kernel_page_table, 0);
 }
 
 // free a proc structure and the data hanging from it,
@@ -141,6 +193,9 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kernel_page_table){
+    proc_free_kernel_page_table(p->kernel_page_table);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -473,6 +528,8 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kernel_page_table));
+        sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -485,6 +542,7 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+      kvminithart();
       intr_on();
       asm volatile("wfi");
     }
