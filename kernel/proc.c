@@ -96,6 +96,10 @@ static pagetable_t proc_kernel_page_table(struct proc*cur_proc){
     return 0;
   }
 
+  for (int i = 1; i < 512;++i){
+    p[i] = kernel_pagetable[i];
+  }
+
   mappages(p, UART0, PGSIZE, UART0, PTE_R | PTE_W);
 
   mappages(p, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
@@ -103,19 +107,6 @@ static pagetable_t proc_kernel_page_table(struct proc*cur_proc){
   mappages(p, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
 
   mappages(p, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
-
-  mappages(p, KERNBASE, (uint64)etext - KERNBASE, KERNBASE, PTE_R | PTE_X);
-
-  mappages(p, (uint64)etext, PHYSTOP - (uint64)etext, (uint64)etext, PTE_R | PTE_W);
-
-  mappages(p, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
-
-  uint64 va = KSTACK((int)(cur_proc - proc));
-  uint16 pa = walkaddr(kernel_pagetable, va);
-  if(pa==0){
-    panic("invalid");
-  }
-  mappages(p, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
 
   return p;
 }
@@ -173,21 +164,24 @@ found:
 
 void proc_free_kernel_page_table(pagetable_t cur_kernel_page_table)
 {
-  uvmunmap(cur_kernel_page_table, UART0, 1, 0);
-
-  uvmunmap(cur_kernel_page_table, VIRTIO0, 1, 0);
-
-  uvmunmap(cur_kernel_page_table, CLINT, 0x10000 / PGSIZE, 0);
-
-  uvmunmap(cur_kernel_page_table, PLIC, 0x400000 / PGSIZE, 0);
-
-  uvmunmap(cur_kernel_page_table, KERNBASE, ((uint64)etext - KERNBASE) / PGSIZE, 0);
-
-  uvmunmap(cur_kernel_page_table, PGROUNDDOWN((uint64)etext), (PHYSTOP - (uint64)etext) / PGSIZE, 0);
-
-  uvmunmap(cur_kernel_page_table, TRAMPOLINE, 1, 0);
-
-  uvmfree(cur_kernel_page_table, 0);
+  for (int i = 1; i < 512; ++i)
+  {
+    cur_kernel_page_table[i] = 0;
+  }
+  pte_t pte = cur_kernel_page_table[0];
+  pagetable_t mid_page = (pagetable_t)PTE2PA(pte);
+  for (int i = 0; i < 512; ++i)
+  {
+    pte_t mid_pte = mid_page[i];
+    if (mid_pte & PTE_V)
+    {
+      uint64 pa = PTE2PA(mid_pte);
+      kfree((void *)pa);
+      mid_page[i] = 0;
+    }
+  }
+  kfree((void *)mid_page);
+  kfree((void *)cur_kernel_page_table);
 }
 
 // free a proc structure and the data hanging from it,
@@ -201,12 +195,11 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
-#if 0    
+  p->pagetable = 0;
   if(p->kernel_page_table){
     proc_free_kernel_page_table(p->kernel_page_table);
   }
-#endif  
-  p->pagetable = 0;
+  p->kernel_page_table = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -607,7 +600,7 @@ forkret(void)
   static int first = 1;
 
   // Still holding p->lock from scheduler.
-  release(&myproc()->lock);
+  release(&(myproc()->lock));
 
   if (first) {
     // File system initialization must be run in the context of a
