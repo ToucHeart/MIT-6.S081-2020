@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern pagetable_t kernel_pagetable;
 
 // initialize the proc table at boot time.
 void
@@ -30,6 +31,15 @@ procinit(void)
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
+      // Allocate a page for the process's kernel stack.
+      // Map it high in memory, followed by an invalid
+      // guard page.
+      char *pa = kalloc();
+      if (pa == 0)
+        panic("kalloc");
+      uint64 va = KSTACK((int)(p - proc));
+      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      p->kstack = va;
   }
   kvminithart();
 }
@@ -81,12 +91,10 @@ extern char trampoline[]; // trampoline.S
 
 static pagetable_t proc_kernel_page_table(struct proc*cur_proc){
 
-  pagetable_t p = (pagetable_t)kalloc();
+  pagetable_t p = (pagetable_t)uvmcreate();
   if(p == 0){
     return 0;
   }
-
-  memset(p, 0, PGSIZE);
 
   mappages(p, UART0, PGSIZE, UART0, PTE_R | PTE_W);
 
@@ -102,12 +110,12 @@ static pagetable_t proc_kernel_page_table(struct proc*cur_proc){
 
   mappages(p, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
 
-  char *pa = kalloc();
-  if (pa == 0)
-    panic("kalloc");
   uint64 va = KSTACK((int)(cur_proc - proc));
+  uint16 pa = walkaddr(kernel_pagetable, va);
+  if(pa==0){
+    panic("invalid");
+  }
   mappages(p, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
-  cur_proc->kstack = va;
 
   return p;
 }
@@ -193,9 +201,11 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+#if 0    
   if(p->kernel_page_table){
     proc_free_kernel_page_table(p->kernel_page_table);
   }
+#endif  
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -535,14 +545,13 @@ scheduler(void)
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-
+        kvminithart();
         found = 1;
       }
       release(&p->lock);
     }
 #if !defined (LAB_FS)
     if(found == 0) {
-      kvminithart();
       intr_on();
       asm volatile("wfi");
     }
