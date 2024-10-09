@@ -13,6 +13,9 @@ struct mbuf;
 struct sock;
 #endif
 
+int copyin_new(pagetable_t, char *, uint64, uint64);
+int copyinstr_new(pagetable_t, char *, uint64, uint64);
+void copy_user_to_kernel_page(pagetable_t user_pagetable, pagetable_t kernel_pagetable, uint64 oldsz, uint64 newsz);
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);

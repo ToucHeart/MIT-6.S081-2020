@@ -288,6 +288,7 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  copy_user_to_kernel_page(p->pagetable, p->kernel_page_table, 0, p->sz);
   release(&p->lock);
 }
 
@@ -300,6 +301,7 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+  uint oldsz=sz;
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
@@ -308,6 +310,7 @@ growproc(int n)
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  copy_user_to_kernel_page(p->pagetable, p->kernel_page_table, oldsz, sz);
   return 0;
 }
 
@@ -353,6 +356,7 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  copy_user_to_kernel_page(np->pagetable, np->kernel_page_table, 0, np->sz);
   release(&np->lock);
 
   return pid;
