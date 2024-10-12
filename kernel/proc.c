@@ -129,6 +129,8 @@ found:
   p->alarm_ticks=0;
   p->alarm_func=0;
   p->ticks_passed=0;
+  p->in_sigalarm=0;
+  memset(&p->saved_frame,0,sizeof(p->saved_frame));
   return p;
 }
 

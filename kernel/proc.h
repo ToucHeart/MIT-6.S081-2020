@@ -106,4 +106,6 @@ struct proc {
   int alarm_ticks;             // Number of ticks of every alarm
   uint64 alarm_func;    // Function to call when alarm goes off
   uint ticks_passed;           // Number of ticks passed since last call
+  struct trapframe saved_frame;//used for alarm handling
+  int in_sigalarm;
 };
