@@ -1,0 +1,8 @@
+{
+    "editor.formatOnSave": true,
+    "editor.formatOnType": false,
+    "files.associations": {
+        "user.h": "c",
+        "proc.h": "c"
+    }
+}

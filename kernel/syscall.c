@@ -82,7 +82,8 @@ argstr(int n, char *buf, int max)
     return -1;
   return fetchstr(addr, buf, max);
 }
-
+extern uint64 sys_sigreturn(void);
+extern uint64 sys_sigalarm(void);
 extern uint64 sys_chdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_dup(void);
@@ -127,6 +128,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_sigalarm] sys_sigalarm,
+[SYS_sigreturn] sys_sigreturn
 };
 
 void
