@@ -68,22 +68,23 @@ usertrap(void)
   }
   else if (r_scause() == 15 || r_scause() == 13)
   {
-    uint64 pa = (uint64)kalloc();
-    if (pa == 0)
-    {
+    uint64 va =r_stval();
+    if(va > p->sz){
       p->killed = 1;
-    }
-    else
-    {
-      uint64 va =r_stval();
-      if(va > p->sz){
-        p->killed = 1;
-      }
-      va =  PGROUNDDOWN(va);
-      if (mappages(p->pagetable, va, PGSIZE, pa, PTE_W | PTE_X | PTE_R | PTE_U) < 0)
+    }else{
+      uint64 pa = (uint64)kalloc();
+      if (pa == 0)
       {
         p->killed = 1;
-        kfree((void *)pa);
+      }
+      else
+      {
+        va =  PGROUNDDOWN(va);
+        if (mappages(p->pagetable, va, PGSIZE, pa, PTE_W | PTE_X | PTE_R | PTE_U) < 0)
+        {
+          p->killed = 1;
+          kfree((void *)pa);
+        }
       }
     }
   }
