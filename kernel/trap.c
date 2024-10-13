@@ -68,7 +68,7 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
     if(which_dev==2){
-      if(p->alarm_func!=0&&p->alarm_ticks!=0&&p->in_sigalarm!=1){
+      if(p->alarm_ticks!=0&&p->in_sigalarm!=1){
         p->ticks_passed+=1;
         if(p->ticks_passed>=p->alarm_ticks){
          p->ticks_passed=0;
