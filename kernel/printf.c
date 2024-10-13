@@ -138,7 +138,8 @@ void backtrace(){
   printf("backtrace:\n");
   uint64 cur_fp = r_fp(); // read the current frame pointer
   uint64 stack_top = PGROUNDUP(cur_fp);
-  while(cur_fp < stack_top){
+  uint64 stack_bottom = PGROUNDDOWN(cur_fp);
+  while(cur_fp < stack_top && cur_fp>=stack_bottom){
     printf("%p\n", *(uint64 *)(cur_fp - 8));
     cur_fp = *(uint64 *)(cur_fp - 16);
   }
