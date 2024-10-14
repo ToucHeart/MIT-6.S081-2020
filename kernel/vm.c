@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -355,12 +357,29 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
-  while(len > 0){
+  struct proc *p = myproc();
+  while (len > 0) {
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
-      return -1;
+    {
+      if(va0 >= p->sz || va0 < p->trapframe->sp){
+        return -1;
+      }
+      pa0 = (uint64)kalloc();
+      if(pa0 == 0){
+      {
+        p->killed = 1;
+        return -1;
+      }
+      }else{
+        if(mappages(p->pagetable,va0,PGSIZE,pa0,PTE_R|PTE_W|PTE_U|PTE_X) < 0){
+          p->killed = 1;
+          kfree((void*)pa0);
+          return -1;
+        }
+      }
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -380,12 +399,29 @@ int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
-
+  struct proc *p = myproc();
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
-      return -1;
+    {
+      if(va0 >= p->sz || va0 < p->trapframe->sp){
+        return -1;
+      }
+      pa0 = (uint64)kalloc();
+      if(pa0 == 0){
+      {
+        p->killed = 1;
+        return -1;
+      }
+      }else{
+        if(mappages(p->pagetable,va0,PGSIZE,pa0,PTE_R|PTE_W|PTE_U|PTE_X) < 0){
+          p->killed = 1;
+          kfree((void*)pa0);
+          return -1;
+        }
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -407,12 +443,29 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   uint64 n, va0, pa0;
   int got_null = 0;
-
-  while(got_null == 0 && max > 0){
+  struct proc *p = myproc();
+  while (got_null == 0 && max > 0) {
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
-      return -1;
+    {
+      if(va0 >= p->sz || va0 < p->trapframe->sp){
+        return -1;
+      }
+      pa0 = (uint64)kalloc();
+      if(pa0 == 0){
+      {
+        p->killed = 1;
+        return -1;
+      }
+      }else{
+        if(mappages(p->pagetable,va0,PGSIZE,pa0,PTE_R|PTE_W|PTE_U|PTE_X) < 0){
+          p->killed = 1;
+          kfree((void*)pa0);
+          return -1;
+        }
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;

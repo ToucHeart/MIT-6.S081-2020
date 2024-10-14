@@ -69,7 +69,7 @@ usertrap(void)
   else if (r_scause() == 15 || r_scause() == 13)
   {
     uint64 va =r_stval();
-    if(va > p->sz){
+    if(va >= p->sz || va < p->trapframe->sp){
       p->killed = 1;
     }else{
       uint64 pa = (uint64)kalloc();
