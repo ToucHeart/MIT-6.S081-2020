@@ -323,9 +323,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    uvmunmap(old,i,1,0);
     if(mappages(old, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    //reference counting to this page +1
   }
   return 0;
 

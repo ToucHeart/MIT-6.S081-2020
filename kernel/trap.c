@@ -69,23 +69,35 @@ usertrap(void)
     // ok
   } else if(r_scause() == 13 || r_scause() == 15){
     uint64 va = r_stval();
-    if(va >= p->sz || va < p->trapframe->sp){
-      p->killed = 1;
-    }else{
-      uint64 pa = (uint64)kalloc();
-      if (pa == 0)
-      {
-        p->killed = 1;
-      }
-      else
-      {
-        va =  PGROUNDDOWN(va);
-        uvmunmap(p->pagetable,va,1,0);
-        if (mappages(p->pagetable, va, PGSIZE, pa, PTE_W | PTE_X | PTE_R | PTE_U) < 0)
+    if(va >= p->sz || va < p->trapframe->sp)
+    {
+      p->killed=1;
+      goto bad;
+    }
+
+    va = PGROUNDDOWN(va);
+    pte_t *pte = walk(p->pagetable,va,0);
+    if(*pte & PTE_COW){
+      uint64 oldpa = walkaddr(p->pagetable,va);
+      if(refcount == 1){
+          uvmunmap(p->pagetable,va,1,0);
+          mappages(p->pagetable,va, PGSIZE, oldpa, PTE_W | PTE_R | PTE_U);
+      }else{
+        uint64 newpa = (uint64)kalloc();
+        if (newpa == 0)
         {
           p->killed = 1;
-          kfree((void *)pa);
+          goto bad;
         }
+        uvmunmap(p->pagetable,va,1,0);
+        // reference counting - 1
+        if (mappages(p->pagetable, va, PGSIZE, newpa, PTE_W | PTE_R | PTE_U) < 0)
+        {
+          p->killed = 1;
+          kfree((void *)newpa);
+          goto bad;
+        }
+        memmove(newpa,oldpa,PGSIZE);
       }
     }
   } 
@@ -95,6 +107,7 @@ usertrap(void)
     p->killed = 1;
   }
 
+bad:
   if(p->killed)
     exit(-1);
 
