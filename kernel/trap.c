@@ -12,6 +12,7 @@ uint ticks;
 extern char trampoline[], uservec[], userret[];
 extern struct spinlock page_ref_cnt_lock;
 extern unsigned char page_ref_cnt[1 << 15];
+extern pagetable_t kernel_pagetable;
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
 
@@ -77,8 +78,8 @@ usertrap(void)
       acquire(&page_ref_cnt_lock);
       int idx = oldpa >> 12;
       if(page_ref_cnt[idx] == 1){
-        uvmunmap(p->pagetable, va, 1, 0);
-        mappages(p->pagetable, va, PGSIZE, oldpa, PTE_W | PTE_R | PTE_U |PTE_X);
+        *pte &= (~PTE_COW);
+        *pte |= PTE_W;
         release(&page_ref_cnt_lock);
         goto bad;
       }
@@ -180,6 +181,7 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
+    vmprint(kernel_pagetable);
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");

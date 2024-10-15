@@ -368,9 +368,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(*pte & PTE_COW){
       acquire(&page_ref_cnt_lock);
       int idx = pa0 >> 12;
-      if(page_ref_cnt[idx] == 1){
-        uvmunmap(pagetable, va0, 1, 0);
-        mappages(pagetable, va0, PGSIZE, pa0, PTE_W | PTE_R | PTE_U |PTE_X);
+      if(page_ref_cnt[idx] == 1){ 
+        *pte &= (~PTE_COW);
+        *pte |= PTE_W;
         release(&page_ref_cnt_lock);
         goto bad;
       }
@@ -474,3 +474,37 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+void vmprint_help(pagetable_t pagetable, int print_indent)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for (int i = 511; i>=0; i--)
+  {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V))
+    {
+      // this PTE points to a lower-level page table.
+      for (int j = 0; j < print_indent; ++j)
+      {
+        printf(" ..");
+      }
+      uint64 child = PTE2PA(pte);
+      printf("%d: pte %p pa %p ", i, pte, child);
+      if(pte & (PTE_R | PTE_W | PTE_X)){
+        printf("%p\n", PTE_FLAGS(pte));
+      }
+      else
+      { // valid but not readable writeable executable
+        printf("\n");
+        vmprint_help((pagetable_t)child, print_indent + 1);
+      }
+    }
+  }
+}
+
+void vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);
+  vmprint_help(pagetable, 1);
+}
+
