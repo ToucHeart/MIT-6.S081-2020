@@ -2539,6 +2539,7 @@ badarg(char *s)
 void
 execout(char *s)
 {
+  printf("reach here\n");
   for(int avail = 0; avail < 15; avail++){
     int pid = fork();
     if(pid < 0){
@@ -2559,6 +2560,7 @@ execout(char *s)
         sbrk(-4096);
       
       close(1);
+      printf("reach here\n");
       char *args[] = { "echo", "x", 0 };
       exec("echo", args);
       exit(0);

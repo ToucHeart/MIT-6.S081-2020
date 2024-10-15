@@ -5,7 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -14,6 +15,8 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+extern struct spinlock page_ref_cnt_lock;
+extern unsigned char page_ref_cnt[1 << 15];
 
 /*
  * create a direct-map page table for the kernel.
@@ -317,17 +320,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte &= (~PTE_W);
+    *pte |= PTE_COW;
     flags = PTE_FLAGS(*pte);
-    flags &= ~PTE_W;
-    flags |= PTE_COW;
+
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
-    uvmunmap(old,i,1,0);
-    if(mappages(old, i, PGSIZE, (uint64)pa, flags) != 0){
-      goto err;
-    }
     //reference counting to this page +1
+    add_ref_cnt(pa);
   }
   return 0;
 
@@ -362,6 +363,38 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+
+    pte_t *pte = walk(pagetable,va0,0);
+    if(*pte & PTE_COW){
+      acquire(&page_ref_cnt_lock);
+      int idx = pa0 >> 12;
+      if(page_ref_cnt[idx] == 1){
+        uvmunmap(pagetable, va0, 1, 0);
+        mappages(pagetable, va0, PGSIZE, pa0, PTE_W | PTE_R | PTE_U |PTE_X);
+        release(&page_ref_cnt_lock);
+        goto bad;
+      }
+      release(&page_ref_cnt_lock);
+
+      uint64 newpa = (uint64)kalloc();
+      if (newpa == 0)
+      {
+        myproc()->killed = 1;
+        return -1;
+      }
+      uvmunmap(pagetable,va0,1,0);
+      // reference counting - 1
+      minus_ref_cnt(pa0);
+      if (mappages(pagetable, va0, PGSIZE, newpa, PTE_W | PTE_R | PTE_U|PTE_X) < 0) {
+        myproc()->killed = 1;
+        kfree((void *)newpa);
+        return -1;
+      }
+      memmove((void*)newpa,(void*)pa0,PGSIZE);
+      pa0 = newpa;
+    }    
+
+bad:
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

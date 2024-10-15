@@ -10,7 +10,8 @@ struct spinlock tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[], userret[];
-
+extern struct spinlock page_ref_cnt_lock;
+extern unsigned char page_ref_cnt[1 << 15];
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
 
@@ -67,38 +68,38 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if(r_scause() == 13 || r_scause() == 15){
+  } else if(r_scause() == 15){
     uint64 va = r_stval();
-    if(va >= p->sz || va < p->trapframe->sp)
-    {
-      p->killed=1;
-      goto bad;
-    }
-
     va = PGROUNDDOWN(va);
     pte_t *pte = walk(p->pagetable,va,0);
     if(*pte & PTE_COW){
       uint64 oldpa = walkaddr(p->pagetable,va);
-      if(refcount == 1){
-          uvmunmap(p->pagetable,va,1,0);
-          mappages(p->pagetable,va, PGSIZE, oldpa, PTE_W | PTE_R | PTE_U);
-      }else{
-        uint64 newpa = (uint64)kalloc();
-        if (newpa == 0)
-        {
-          p->killed = 1;
-          goto bad;
-        }
-        uvmunmap(p->pagetable,va,1,0);
-        // reference counting - 1
-        if (mappages(p->pagetable, va, PGSIZE, newpa, PTE_W | PTE_R | PTE_U) < 0)
-        {
-          p->killed = 1;
-          kfree((void *)newpa);
-          goto bad;
-        }
-        memmove(newpa,oldpa,PGSIZE);
+      acquire(&page_ref_cnt_lock);
+      int idx = oldpa >> 12;
+      if(page_ref_cnt[idx] == 1){
+        uvmunmap(p->pagetable, va, 1, 0);
+        mappages(p->pagetable, va, PGSIZE, oldpa, PTE_W | PTE_R | PTE_U |PTE_X);
+        release(&page_ref_cnt_lock);
+        goto bad;
       }
+      release(&page_ref_cnt_lock);
+
+      uint64 newpa = (uint64)kalloc();
+      if (newpa == 0)
+      {
+        p->killed = 1;
+        goto bad;
+      }
+      uvmunmap(p->pagetable,va,1,0);
+      // reference counting - 1
+      minus_ref_cnt(oldpa);
+      if (mappages(p->pagetable, va, PGSIZE, newpa, PTE_W | PTE_R | PTE_U|PTE_X) <
+          0) {
+        p->killed = 1;
+        kfree((void *)newpa);
+        goto bad;
+      }
+      memmove((void*)newpa,(void*)oldpa,PGSIZE);
     }
   } 
   else {
