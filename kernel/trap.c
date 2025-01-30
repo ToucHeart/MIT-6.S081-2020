@@ -68,45 +68,12 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
     if(which_dev==2){
-      if(p->alarm_func!=0&&p->alarm_ticks!=0&&p->in_sigalarm!=1){
+      if(p->alarm_ticks!=0&&p->in_sigalarm!=1){
         p->ticks_passed+=1;
         if(p->ticks_passed>=p->alarm_ticks){
          p->ticks_passed=0;
          p->in_sigalarm=1;
-         
-         p->saved_frame.ra = p->trapframe->ra;
-         p->saved_frame.sp = p->trapframe->sp;
-         p->saved_frame.gp = p->trapframe->gp;
-         p->saved_frame.tp = p->trapframe->tp;
-         p->saved_frame.t0 = p->trapframe->t0;
-         p->saved_frame.t1 = p->trapframe->t1;
-         p->saved_frame.t2 = p->trapframe->t2;
-         p->saved_frame.s0 = p->trapframe->s0;
-         p->saved_frame.s1 = p->trapframe->s1;
-         p->saved_frame.a0 = p->trapframe->a0;
-         p->saved_frame.a1 = p->trapframe->a1;
-         p->saved_frame.a2 = p->trapframe->a2;
-         p->saved_frame.a3 = p->trapframe->a3;
-         p->saved_frame.a4 = p->trapframe->a4;
-         p->saved_frame.a5 = p->trapframe->a5;
-         p->saved_frame.a6 = p->trapframe->a6;
-         p->saved_frame.a7 = p->trapframe->a7;
-         p->saved_frame.s2 = p->trapframe->s2;
-         p->saved_frame.s3 = p->trapframe->s3;
-         p->saved_frame.s4 = p->trapframe->s4;
-         p->saved_frame.s5 = p->trapframe->s5;
-         p->saved_frame.s6 = p->trapframe->s6;
-         p->saved_frame.s7 = p->trapframe->s7;
-         p->saved_frame.s8 = p->trapframe->s8;
-         p->saved_frame.s9 = p->trapframe->s9;
-         p->saved_frame.s10 = p->trapframe->s10;
-         p->saved_frame.s11 = p->trapframe->s11;
-         p->saved_frame.t3 = p->trapframe->t3;
-         p->saved_frame.t4 = p->trapframe->t4;
-         p->saved_frame.t5 = p->trapframe->t5;
-         p->saved_frame.t6 = p->trapframe->t6;
-         p->saved_frame.epc = p->trapframe->epc;
-
+         p->saved_frame = *(p->trapframe);
          p->trapframe->epc = p->alarm_func;
         }
       }
