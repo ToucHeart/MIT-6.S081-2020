@@ -14,7 +14,7 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
-unsigned char page_ref_cnt[1 << 15];
+unsigned char page_ref_cnt[PHYSTOP/PGSIZE];
 struct spinlock page_ref_cnt_lock;
 
 struct run {
@@ -40,7 +40,7 @@ void minus_ref_cnt(uint64 pa){
   release(&page_ref_cnt_lock);
 }
 
-void set_ref_cnt_1(uint64 pa){
+void init_ref_cnt(uint64 pa){
   acquire(&page_ref_cnt_lock);
   int idx = pa >> 12;
   page_ref_cnt[idx] = 1;
@@ -118,7 +118,7 @@ kalloc(void)
   if(r)
   {
     memset((char*)r, 5, PGSIZE); // fill with junk
-    set_ref_cnt_1((uint64)r);
+    init_ref_cnt((uint64)r);
   }
   return (void *)r;
 }

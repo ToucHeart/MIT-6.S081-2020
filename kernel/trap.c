@@ -31,6 +31,41 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+int 
+cowfault(pagetable_t pagetable,uint64 va){
+    pte_t *pte = walk(pagetable,va,0);
+    if(pte==0||(*pte&PTE_U)==0||(*pte&PTE_V)==0){
+      return -1;
+    }
+    if(*pte & PTE_COW){
+      uint64 oldpa = walkaddr(pagetable,va);
+      acquire(&page_ref_cnt_lock);
+      int idx = oldpa >> 12;
+      if(page_ref_cnt[idx] == 1){
+        *pte &= (~PTE_COW);
+        *pte |= PTE_W;
+        release(&page_ref_cnt_lock);
+        return 0;
+      }
+      release(&page_ref_cnt_lock);
+
+      uint64 newpa = (uint64)kalloc();
+      if (newpa == 0)
+      {
+        return -1;
+      }
+      uvmunmap(pagetable,va,1,0);
+      // reference counting - 1
+      minus_ref_cnt(oldpa);
+      if (mappages(pagetable, va, PGSIZE, newpa, PTE_W | PTE_R | PTE_U|PTE_X) <
+          0) {
+        kfree((void *)newpa);
+        return -1;
+      }
+      memmove((void*)newpa,(void*)oldpa,PGSIZE);
+    }
+    return 0;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -70,46 +105,17 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if(r_scause() == 15){
-    uint64 va = r_stval();
-    va = PGROUNDDOWN(va);
-    pte_t *pte = walk(p->pagetable,va,0);
-    if(*pte & PTE_COW){
-      uint64 oldpa = walkaddr(p->pagetable,va);
-      acquire(&page_ref_cnt_lock);
-      int idx = oldpa >> 12;
-      if(page_ref_cnt[idx] == 1){
-        *pte &= (~PTE_COW);
-        *pte |= PTE_W;
-        release(&page_ref_cnt_lock);
-        goto bad;
-      }
-      release(&page_ref_cnt_lock);
+    uint64 va = PGROUNDDOWN(r_stval());
 
-      uint64 newpa = (uint64)kalloc();
-      if (newpa == 0)
-      {
-        p->killed = 1;
-        goto bad;
-      }
-      uvmunmap(p->pagetable,va,1,0);
-      // reference counting - 1
-      minus_ref_cnt(oldpa);
-      if (mappages(p->pagetable, va, PGSIZE, newpa, PTE_W | PTE_R | PTE_U|PTE_X) <
-          0) {
-        p->killed = 1;
-        kfree((void *)newpa);
-        goto bad;
-      }
-      memmove((void*)newpa,(void*)oldpa,PGSIZE);
+    if(cowfault(p->pagetable, va)<0){
+      p->killed = 1;
     }
-  } 
-  else {
+  } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
-bad:
   if(p->killed)
     exit(-1);
 
@@ -181,7 +187,7 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    vmprint(kernel_pagetable);
+    // vmprint(kernel_pagetable);
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");

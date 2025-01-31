@@ -320,14 +320,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    pte_t old_pte = *pte;
     *pte &= (~PTE_W);
     *pte |= PTE_COW;
     flags = PTE_FLAGS(*pte);
 
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      *pte = old_pte;
       goto err;
     }
-    //reference counting to this page +1
+    //reference counting to this page + 1
     add_ref_cnt(pa);
   }
   return 0;
@@ -364,37 +366,12 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(pa0 == 0)
       return -1;
 
-    pte_t *pte = walk(pagetable,va0,0);
-    if(*pte & PTE_COW){
-      acquire(&page_ref_cnt_lock);
-      int idx = pa0 >> 12;
-      if(page_ref_cnt[idx] == 1){ 
-        *pte &= (~PTE_COW);
-        *pte |= PTE_W;
-        release(&page_ref_cnt_lock);
-        goto bad;
-      }
-      release(&page_ref_cnt_lock);
-
-      uint64 newpa = (uint64)kalloc();
-      if (newpa == 0)
-      {
-        myproc()->killed = 1;
-        return -1;
-      }
-      uvmunmap(pagetable,va0,1,0);
-      // reference counting - 1
-      minus_ref_cnt(pa0);
-      if (mappages(pagetable, va0, PGSIZE, newpa, PTE_W | PTE_R | PTE_U|PTE_X) < 0) {
-        myproc()->killed = 1;
-        kfree((void *)newpa);
-        return -1;
-      }
-      memmove((void*)newpa,(void*)pa0,PGSIZE);
-      pa0 = newpa;
-    }    
-
-bad:
+    if(cowfault(pagetable, va0)<0){
+      return -1;
+    }
+    
+    pa0= walkaddr(pagetable, va0);
+    
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
