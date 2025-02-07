@@ -1,0 +1,22 @@
+thread 1: 
+insert
+  struct entry *e = malloc(sizeof(struct entry));
+  e->key = key;
+  e->value = value;
+  e->next = n;
+
+thread 2:
+insert
+  struct entry *e = malloc(sizeof(struct entry));
+  e->key = key;
+  e->value = value;
+  e->next = n;
+
+thread 1:
+  *p = e;
+
+thread 2:
+  *p = e;
+
+
+thus the e created by thread 1 was lost and can't be found,leading to get failed
