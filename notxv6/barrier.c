@@ -33,32 +33,11 @@ barrier()
   pthread_mutex_lock(&bstate.barrier_mutex);
   bstate.nthread++;
   if(bstate.nthread==nthread){
-    pthread_cond_broadcast(&bstate.barrier_cond);
-  } else {
-    while(!(bstate.nthread==nthread)){
-      pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
-    }
-  }
-  
-  bstate.want_exit++;
-  if(bstate.want_exit==nthread){
     bstate.round++;
     bstate.nthread = 0;
-    
     pthread_cond_broadcast(&bstate.barrier_cond);
-    
-    bstate.exited++;
-    while(bstate.exited!=nthread){
-      pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
-    }
-    bstate.want_exit = 0;
-    bstate.exited = 0;
   } else {
-    while(!(bstate.want_exit==nthread)){
-      pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
-    }
-    bstate.exited++;
-    pthread_cond_broadcast(&bstate.barrier_cond);
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
   }
   pthread_mutex_unlock(&bstate.barrier_mutex);
 }
