@@ -99,12 +99,14 @@ test0()
     mkdir(dir);
     if (chdir(dir) < 0) {
       printf("chdir failed\n");
+      printf("reach line 102");
       exit(1);
     }
     unlink(file);
     createfile(file, N);
     if (chdir("..") < 0) {
       printf("chdir failed\n");
+      printf("reach line 109\n");
       exit(1);
     }
   }
