@@ -238,6 +238,7 @@ bad:
   return -1;
 }
 
+// return locked inode pointer of the created file
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
@@ -310,6 +311,26 @@ sys_open(void)
     }
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+  }
+
+  if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+    int link_depth = 0;
+    while (ip->type == T_SYMLINK && link_depth < 15) {
+      readi(ip,0,(uint64)path,0,ip->size);
+      path[ip->size] = '\0';
+      iunlockput(ip);
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      link_depth++;
+    }
+    if(link_depth >= 15){
       iunlockput(ip);
       end_op();
       return -1;
@@ -482,5 +503,33 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// symlink(target, path)
+//create the path as a symlink to the target, target does not need to exist 
+uint64 
+sys_symlink(void) {
+  char path[MAXPATH], target[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  if ((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) != strlen(target)){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
