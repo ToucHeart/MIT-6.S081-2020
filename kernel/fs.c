@@ -702,6 +702,7 @@ namex(char *path, int nameiparent, char *name)
   return ip;
 }
 
+//find the inode according to the path
 struct inode*
 namei(char *path)
 {

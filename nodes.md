@@ -258,8 +258,6 @@ struct inode* nameiparent(char *path, char *name) {
 
 这个实现展示了xv6如何通过精细的锁管理和引用计数机制，在保证正确性的同时实现高效的并发路径查找。
 
-
-
 ### 8.13 文件描述符层（File Descriptor Layer）
 
 Unix 设计的一个精妙之处在于，**几乎所有资源（如设备、管道、真实文件）都被抽象为文件**，而文件描述符层（File Descriptor Layer）就是实现这种统一性的关键。xv6 的文件描述符层管理进程的打开文件，并提供统一的读写接口。
@@ -451,8 +449,6 @@ xv6 的文件描述符层提供了统一的文件抽象：
 
 这种设计使得 xv6 能像 Unix 一样，**“一切皆文件”**（Everything is a file），并支持多进程安全地操作文件。
 
-
-
 当进行fork系统调用时,子进程拷贝父进程打开文件表,filedup导致FILE结构体指针中的ref+1
 
   // increment reference counts on open file descriptors.
@@ -462,7 +458,6 @@ xv6 的文件描述符层提供了统一的文件抽象：
     if(p->ofile[i])
 
     np->ofile[i] =filedup(p->ofile[i]);
-
 
 ### **`fork()` 时的文件描述符复制分析**
 
@@ -614,3 +609,362 @@ inode_A:
 4. **`inode` 的释放由 `iput()` 管理**，只有当所有 `struct file` 都关闭且无其他引用时才会释放。
 
 这种设计使得 xv6 能高效管理文件描述符，并符合 Unix 的文件共享语义。
+
+### **8.14 代码：系统调用（System Calls）**
+
+xv6 的文件系统系统调用（如 `open`、`link`、`unlink`、`mkdir` 等）主要实现在 `kernel/sysfile.c` 中。本节重点分析几个关键系统调用的实现逻辑，特别是涉及事务（transaction）和并发控制的部分。
+
+---
+
+## **1. `sys_link`：创建硬链接**
+
+`sys_link` 的作用是为一个已存在的 inode 创建新的目录项（硬链接）。
+
+### **执行流程**
+
+1. **解析参数**：
+   ```c
+   char old[MAXPATH], new[MAXPATH];
+   if (argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
+     return -1;  // 获取用户态传入的路径 old 和 new
+   ```
+2. **检查 `old` 的合法性**：
+   ```c
+   struct inode *ip;
+   if ((ip = namei(old)) == 0) return -1;  // 查找 old 对应的 inode
+   ilock(ip);
+   if (ip->type == T_DIR) {  // 不允许对目录创建硬链接
+     iunlockput(ip);
+     return -1;
+   }
+   ```
+3. **增加 inode 的链接计数 `nlink`**：
+   ```c
+   ip->nlink++;  // 硬链接数 +1
+   iupdate(ip);  // 立即写回磁盘（事务保护）
+   ```
+4. **解析 `new` 的父目录**：
+   ```c
+   struct inode *dp;
+   char name[DIRSIZ];
+   dp = nameiparent(new, name);  // 获取 new 的父目录 inode
+   ilock(dp);
+   ```
+5. **在父目录中创建新条目**：
+   ```c
+   if (dirlookup(dp, name, 0) != 0) {  // 检查 new 是否已存在
+     iunlockput(dp);
+     iunlockput(ip);
+     return -1;
+   }
+   if (dirlink(dp, name, ip->inum) < 0) {  // 创建硬链接
+     iunlockput(dp);
+     iunlockput(ip);
+     return -1;
+   }
+   ```
+6. **释放锁并返回**：
+   ```c
+   iunlockput(dp);
+   iunlockput(ip);
+   return 0;
+   ```
+
+### **事务（Transaction）的作用**
+
+- **原子性**：如果 `dirlink` 失败，`nlink++` 的操作会通过事务回滚，避免不一致。
+- **崩溃安全**：即使系统在 `dirlink` 过程中崩溃，`nlink` 也不会错误增加。
+
+---
+
+## **2. `sys_unlink`：删除链接**
+
+`sys_unlink` 删除一个目录项，并减少 inode 的 `nlink`。如果 `nlink` 减到 0，则释放 inode。
+
+### **关键逻辑**
+
+1. **检查文件类型**：
+   ```c
+   if (ip->type == T_DIR && !isdirempty(ip)) {
+     iunlockput(ip);
+     return -1;  // 非空目录不能直接 unlink
+   }
+   ```
+2. **删除目录项**：
+   ```c
+   if (de.inum == ip->inum) {
+     if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+       panic("unlink: writei failed");
+   }
+   ```
+3. **更新 `nlink`**：
+   ```c
+   ip->nlink--;
+   iupdate(ip);  // 事务保护
+   ```
+
+---
+
+## **3. `create`：通用文件创建函数**
+
+`create` 是一个通用函数，被 `open`（`O_CREAT`）、`mkdir` 和 `mknod` 调用，用于创建新文件。
+
+### **执行流程**
+
+1. **解析父目录**：
+   ```c
+   struct inode *dp = nameiparent(path, name);  // 获取父目录 inode
+   ```
+2. **检查文件是否已存在**：
+   ```c
+   struct inode *ip = dirlookup(dp, name, 0);
+   if (ip != 0) {
+     if (type == T_FILE && ip->type == T_FILE) {
+       return ip;  // 普通文件已存在，直接返回（open O_CREAT 允许）
+     }
+     iunlockput(ip);
+     return 0;  // 其他情况报错
+   }
+   ```
+3. **分配新 inode**：
+   ```c
+   ip = ialloc(dp->dev, type);  // 分配新的 inode
+   ilock(ip);
+   ```
+4. **初始化目录（如果是 `mkdir`）**：
+   ```c
+   if (type == T_DIR) {
+     dp->nlink++;  // 父目录 nlink++（因为新增了子目录的 ".."）
+     iupdate(dp);
+     // 创建 "." 和 ".." 条目
+     if (dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
+       panic("create dots");
+   }
+   ```
+5. **链接到父目录**：
+   ```c
+   if (dirlink(dp, name, ip->inum) < 0) {
+     panic("create: dirlink");
+   }
+   ```
+
+### **锁的持有**
+
+- 同时持有 `dp`（父目录）和 `ip`（新 inode）的锁，但不会死锁，因为 `ip` 是新分配的，没有其他进程会竞争它。
+
+---
+
+## **4. `sys_open`：打开文件**
+
+`sys_open` 是复杂的系统调用，支持多种模式（如 `O_RDONLY`、`O_WRONLY`、`O_CREAT`）。
+
+### **关键逻辑**
+
+1. **解析参数**：
+   ```c
+   char path[MAXPATH];
+   int omode;
+   if (argstr(0, path, MAXPATH) < 0 || argint(1, &omode) < 0)
+     return -1;
+   ```
+2. **处理 `O_CREAT`**：
+   ```c
+   if (omode & O_CREAT) {
+     ip = create(path, T_FILE, 0, 0);  // 创建新文件
+   } else {
+     ip = namei(path);  // 查找现有文件
+   }
+   ```
+3. **检查权限**：
+   ```c
+   if (ip->type == T_DIR && omode != O_RDONLY) {
+     iunlockput(ip);
+     return -1;  // 目录只能以只读模式打开
+   }
+   ```
+4. **分配文件描述符**：
+   ```c
+   struct file *f = filealloc();  // 分配 struct file
+   f->type = FD_INODE;
+   f->ip = ip;
+   f->off = 0;
+   f->readable = !(omode & O_WRONLY);
+   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+   ```
+
+---
+
+## **5. `sys_pipe`：创建管道**
+
+`sys_pipe` 通过文件系统接口暴露管道功能。
+
+### **执行流程**
+
+1. **分配两个文件描述符**：
+   ```c
+   int fd[2];
+   if (argaddr(0, (uint64*)fd) < 0) return -1;
+   ```
+2. **创建管道**：
+   ```c
+   struct pipe *pi = pipealloc();  // 分配管道
+   ```
+3. **绑定到文件描述符**：
+   ```c
+   f0->type = FD_PIPE;
+   f0->readable = 1;
+   f0->writable = 0;
+   f0->pipe = pi;
+
+   f1->type = FD_PIPE;
+   f1->readable = 0;
+   f1->writable = 1;
+   f1->pipe = pi;
+   ```
+
+---
+
+## **总结**
+
+1. **事务**：`sys_link` 和 `create` 使用事务确保磁盘操作原子性。
+2. **锁**：`create` 同时持有父目录和新 inode 的锁，但通过分配顺序避免死锁。
+3. **共享逻辑**：`create` 被多个系统调用复用，减少代码重复。
+4. **文件描述符**：`sys_open` 和 `sys_pipe` 最终都会分配 `struct file` 并绑定到进程的 `ofile` 表。
+
+
+
+### **硬链接创建后的目录结构表示**
+
+在 xv6 文件系统中，`sys_link` 会为同一个 inode 创建多个目录项（硬链接）。假设：
+
+- **原文件路径**：`/dir1/a.txt`（inode 编号 `100`）
+- **硬链接路径**：`/dir2/b.txt`（指向同一个 inode `100`）
+
+---
+
+## **1. 创建硬链接前的结构**
+
+### **(1) 目录 `/dir1` 的内容**
+
+| inum | name      | type   |
+| ---- | --------- | ------ |
+| 200  | `.`     | T_DIR  |
+| 200  | `..`    | T_DIR  |
+| 100  | `a.txt` | T_FILE |
+
+### **(2) 目录 `/dir2` 的内容**
+
+| inum | name   | type  |
+| ---- | ------ | ----- |
+| 300  | `.`  | T_DIR |
+| 300  | `..` | T_DIR |
+
+### **(3) inode 表**
+
+| inum | type   | nlink | blocks       |
+| ---- | ------ | ----- | ------------ |
+| 100  | T_FILE | 1     | [disk block] |
+| 200  | T_DIR  | 2     | [disk block] |
+| 300  | T_DIR  | 2     | [disk block] |
+
+---
+
+## **2. 执行 `sys_link("/dir1/a.txt", "/dir2/b.txt")`**
+
+1. **查找原文件 `/dir1/a.txt`**：
+   - 找到 inode `100`，`nlink++`（从 1→2）。
+2. **在 `/dir2` 中添加新条目**：
+   - 新增一项 `b.txt`，指向 inode `100`。
+
+---
+
+## **3. 创建硬链接后的结构**
+
+### **(1) 目录 `/dir1` 的内容（不变）**
+
+| inum | name      | type   |
+| ---- | --------- | ------ |
+| 200  | `.`     | T_DIR  |
+| 200  | `..`    | T_DIR  |
+| 100  | `a.txt` | T_FILE |
+
+### **(2) 目录 `/dir2` 的内容（新增 `b.txt`）**
+
+| inum | name      | type   |
+| ---- | --------- | ------ |
+| 300  | `.`     | T_DIR  |
+| 300  | `..`    | T_DIR  |
+| 100  | `b.txt` | T_FILE |
+
+### **(3) inode 表（更新 `nlink`）**
+
+| inum | type   | nlink | blocks       |
+| ---- | ------ | ----- | ------------ |
+| 100  | T_FILE | 2     | [disk block] |
+| 200  | T_DIR  | 2     | [disk block] |
+| 300  | T_DIR  | 2     | [disk block] |
+
+---
+
+## **4. 磁盘上的实际表示**
+
+### **(1) 目录 `/dir1` 的磁盘块**
+
+```
+| inum 100 | name "a.txt" | type T_FILE |
+| inum 200 | name "."     | type T_DIR  |
+| inum 200 | name ".."    | type T_DIR  |
+```
+
+### **(2) 目录 `/dir2` 的磁盘块**
+
+```
+| inum 100 | name "b.txt" | type T_FILE | ← 新增条目
+| inum 300 | name "."     | type T_DIR  |
+| inum 300 | name ".."    | type T_DIR  |
+```
+
+### **(3) inode `100` 的磁盘表示**
+
+```
+struct dinode {
+  short type;    // T_FILE
+  short nlink;   // 2 (原先为 1)
+  uint size;     // 文件大小
+  uint addrs[NDIRECT+1]; // 数据块指针
+}
+```
+
+---
+
+## **5. 关键点总结**
+
+1. **硬链接的本质**：
+   - 多个目录项（`a.txt` 和 `b.txt`）指向同一个 inode（`100`）。
+   - 文件数据块只有一份，通过 `inode->addrs` 访问。
+2. **`nlink` 的作用**：
+   - 记录有多少个目录项指向该 inode。
+   - 只有 `nlink == 0` 时，inode 才会被释放。
+3. **删除文件的影响**：
+   - `unlink("/dir1/a.txt")`：删除 `/dir1/a.txt`，`nlink--`（从 2→1）。
+   - 文件仍可通过 `/dir2/b.txt` 访问。
+   - 只有 `unlink("/dir2/b.txt")` 后，`nlink` 变为 0，文件数据才会被回收。
+
+---
+
+## **图示**
+
+```
+文件系统结构：
+/dir1
+  |-- a.txt (inum 100)
+/dir2
+  |-- b.txt (inum 100)  ← 硬链接
+
+磁盘 inode 表：
+inode 100: type=T_FILE, nlink=2, blocks=[...]
+inode 200: type=T_DIR, nlink=2, blocks=[...]
+inode 300: type=T_DIR, nlink=2, blocks=[...]
+```
+
+硬链接的创建不复制文件数据，只是增加了一个指向相同 inode 的目录项！
