@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -29,6 +33,26 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+long readfile2pg(uint64 va,uint64 pa,struct vma*mapping){
+  ilock(mapping->file->ip);
+  uint tot = readi(mapping->file->ip, 0, pa, mapping->offset + va - mapping->addr, PGSIZE);
+  iunlock(mapping->file->ip);
+  if(tot < PGSIZE){
+    memset((void*)pa + tot, 0, PGSIZE - tot);
+  }
+  long pte_privilege = 0;
+  if(mapping->prot & PROT_READ){
+    pte_privilege |= PTE_R;
+  }
+  if(mapping->prot & PROT_WRITE){
+    pte_privilege |= PTE_W;
+  }
+  if(mapping->prot & PROT_EXEC){
+    pte_privilege |= PTE_X;
+  }
+  pte_privilege |= PTE_U;
+  return pte_privilege;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -65,7 +89,38 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  }
+  else if (r_scause() == 15 || r_scause() == 13)
+  {
+    uint64 va =r_stval();
+    if(va >= p->sz || va < p->trapframe->sp){
+      p->killed = 1;
+      goto check;
+    }
+    
+    struct proc *p = myproc();
+    int i;
+    for (i = 0; i < NMAPS; ++i) {
+      if (va >= p->maps[i].addr && va < p->maps[i].addr + p->maps[i].length){
+        break;
+      }
+    }
+    if(i >= NMAPS){
+      goto check;
+    }
+    uint64 pa = (uint64)kalloc();
+    if (pa == 0){
+      p->killed = 1;
+      goto check;
+    } 
+    va = PGROUNDDOWN(va);
+    long pte_privilege = readfile2pg(va,pa,&p->maps[i]);
+    if (mappages(p->pagetable, va, PGSIZE, pa, pte_privilege) < 0) {
+      p->killed = 1;
+      kfree((void *)pa);
+    }
+  } 
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -73,6 +128,7 @@ usertrap(void)
     p->killed = 1;
   }
 
+check:
   if(p->killed)
     exit(-1);
 

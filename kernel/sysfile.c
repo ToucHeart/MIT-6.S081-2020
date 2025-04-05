@@ -484,3 +484,106 @@ sys_pipe(void)
   }
   return 0;
 }
+
+//if succeed return a pointer to the addr ,otherwise return (void*)-1
+// void *mmap(void *addr, uint64 length, int prot, int flags, int fd, uint64 offset);
+uint64 sys_mmap(void) {
+  uint64 length, offset;
+  int prot, flags, fd;
+  struct file *f;
+  if ( argaddr(1,&length) < 0 || argint(2,&prot) < 0 || argint(3,&flags) <0 
+    || argfd(4, &fd, &f) < 0 || argaddr(5, &offset) < 0)
+    return -1;
+  struct proc *p = myproc();
+  struct vma *mapping;
+  for (int i = 0; i < 16; ++i) {
+    mapping = &p->maps[i];
+    if(mapping->addr == 0){
+      goto found;
+    }
+  }
+  return -1;
+
+found:
+  if(flags&MAP_SHARED){
+    if(f->readable != (prot & PROT_READ) || f->writable != !!(prot & PROT_WRITE)){
+      return -1;
+    }
+  };
+  uint64 oldsz = PGROUNDUP(p->sz);
+  p->sz = oldsz + length;
+  mapping->addr = oldsz;
+  mapping->length = length;
+  mapping->prot = prot;
+  mapping->flags = flags;
+  mapping->file = filedup(f);
+  mapping->offset = offset;
+  mapping->remainpages = length / PGSIZE + (length % PGSIZE != 0);
+  return oldsz;
+}
+
+void writepg2file(struct vma *mapping,uint64 addr,int n){
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  int r,i = 0;
+  int off = mapping->offset + addr - mapping->addr;
+  struct file *f = mapping->file;
+  while (i < n) {
+    int n1 = n - i;
+    if(n1 > max)
+      n1 = max;
+
+    begin_op();
+    ilock(f->ip);
+    if ((r = writei(f->ip, 1, addr + i, off, n1)) > 0)
+      off += r;
+    iunlock(f->ip);
+    end_op();
+
+    if(r != n1){
+      // error from writei
+      break;
+    }
+    i += r;
+  }
+}
+// return 0 if succeed,otherwise return -1
+// int munmap(void *addr, uint64 length);
+uint64 sys_munmap_helper(uint64 addr,uint64 length) {
+  struct proc *p = myproc();
+  struct vma *mapping;
+  for (int i = 0; i < NMAPS; ++i) {
+    mapping = &p->maps[i];
+    if (addr >= mapping->addr && addr <  mapping->addr +  mapping->length) {
+      goto found;
+    }
+  }
+  return -1;
+
+found:
+  addr = PGROUNDDOWN(addr);
+  uint64 npages = length / PGSIZE + (length % PGSIZE != 0);
+  for (int i = 0;i < npages;++i,addr += PGSIZE){
+    if(walkaddr(p->pagetable,addr)==0){ //not mapped a physical page
+      continue;
+    }
+    if (mapping->flags & MAP_SHARED) {
+      // write back to the file
+      writepg2file(mapping, addr, PGSIZE);
+    }
+    uvmunmap(p->pagetable, addr, 1, 1);
+  }
+  mapping->remainpages -= npages;
+  if(mapping->remainpages <= 0){
+    fileundup(mapping->file);
+    memset(mapping, 0, sizeof(struct vma));
+  }
+  return 0;
+}
+
+uint64 sys_munmap(void){
+  uint64 addr, length;
+  if(argaddr(0, &addr)<0||argaddr(1,&length)<0){
+    return -1;
+  }
+  return sys_munmap_helper(addr, length);
+}

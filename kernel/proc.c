@@ -133,7 +133,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  memset(p->maps, 0, sizeof(p->maps));
   return p;
 }
 
@@ -332,7 +332,7 @@ reparent(struct proc *p)
     }
   }
 }
-
+extern uint64 sys_munmap_helper(uint64 addr, uint64 length);
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -394,6 +394,11 @@ exit(int status)
 
   release(&original_parent->lock);
 
+  for (int i = 0; i < NMAPS;++i){
+    if(p->maps[i].addr){
+      sys_munmap_helper(p->maps[i].addr, p->maps[i].length);
+    }
+  }
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
