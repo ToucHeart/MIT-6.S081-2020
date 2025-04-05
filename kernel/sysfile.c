@@ -15,7 +15,9 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
+uint64 min(uint64 a, uint64 b) { return a < b ? a : b; }
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -510,16 +512,15 @@ found:
       return -1;
     }
   };
-  uint64 oldsz = PGROUNDUP(p->sz);
-  p->sz = oldsz + length;
-  mapping->addr = oldsz;
+  mapping->addr = PGROUNDDOWN(p->cur_pos - length);
   mapping->length = length;
   mapping->prot = prot;
   mapping->flags = flags;
   mapping->file = filedup(f);
   mapping->offset = offset;
   mapping->remainpages = length / PGSIZE + (length % PGSIZE != 0);
-  return oldsz;
+  p->cur_pos = mapping->addr;
+  return mapping->addr;
 }
 
 void writepg2file(struct vma *mapping,uint64 addr,int n){
@@ -553,13 +554,14 @@ uint64 sys_munmap_helper(uint64 addr,uint64 length) {
   struct vma *mapping;
   for (int i = 0; i < NMAPS; ++i) {
     mapping = &p->maps[i];
-    if (addr >= mapping->addr && addr <  mapping->addr +  mapping->length) {
+    if (addr >= mapping->addr && addr < mapping->addr +  mapping->length) {
       goto found;
     }
   }
   return -1;
 
 found:
+  length = min(length, mapping->length);
   addr = PGROUNDDOWN(addr);
   uint64 npages = length / PGSIZE + (length % PGSIZE != 0);
   for (int i = 0;i < npages;++i,addr += PGSIZE){

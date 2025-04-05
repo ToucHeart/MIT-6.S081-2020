@@ -134,6 +134,7 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
   memset(p->maps, 0, sizeof(p->maps));
+  p->cur_pos = TRAPFRAME;
   return p;
 }
 
@@ -157,6 +158,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  memset(p->maps, 0, sizeof(struct vma));
 }
 
 // Create a user page table for a given process,
@@ -302,6 +304,13 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  for (int i = 0; i < NMAPS;++i){
+    if(p->maps[i].addr){
+      np->maps[i] = p->maps[i];
+      np->maps[i].file = filedup(p->maps[i].file);
+    }
+  }
+  np->cur_pos = p->cur_pos;
   release(&np->lock);
 
   return pid;
@@ -344,6 +353,11 @@ exit(int status)
   if(p == initproc)
     panic("init exiting");
 
+  for (int i = 0; i < NMAPS;++i){
+    if(p->maps[i].addr){
+      sys_munmap_helper(p->maps[i].addr, p->maps[i].length);
+    }
+  }
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
@@ -394,11 +408,6 @@ exit(int status)
 
   release(&original_parent->lock);
 
-  for (int i = 0; i < NMAPS;++i){
-    if(p->maps[i].addr){
-      sys_munmap_helper(p->maps[i].addr, p->maps[i].length);
-    }
-  }
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");

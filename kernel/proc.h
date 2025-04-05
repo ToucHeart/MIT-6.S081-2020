@@ -93,6 +93,7 @@ struct vma {
   uint64 remainpages;  // 剩余没有被unmap的page
 };
 
+#define NMAPS 16
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -114,6 +115,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  #define NMAPS 16
   struct vma maps[NMAPS];
+  uint64 cur_pos;
 };

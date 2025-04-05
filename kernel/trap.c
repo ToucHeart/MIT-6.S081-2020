@@ -89,43 +89,35 @@ usertrap(void)
     intr_on();
 
     syscall();
-  }
-  else if (r_scause() == 15 || r_scause() == 13)
-  {
-    uint64 va =r_stval();
-    if(va >= p->sz || va < p->trapframe->sp){
-      p->killed = 1;
-      goto check;
-    }
-    
-    struct proc *p = myproc();
-    int i;
-    for (i = 0; i < NMAPS; ++i) {
-      if (va >= p->maps[i].addr && va < p->maps[i].addr + p->maps[i].length){
-        break;
-      }
-    }
-    if(i >= NMAPS){
-      goto check;
-    }
-    uint64 pa = (uint64)kalloc();
-    if (pa == 0){
-      p->killed = 1;
-      goto check;
-    } 
-    va = PGROUNDDOWN(va);
-    long pte_privilege = readfile2pg(va,pa,&p->maps[i]);
-    if (mappages(p->pagetable, va, PGSIZE, pa, pte_privilege) < 0) {
-      p->killed = 1;
-      kfree((void *)pa);
-    }
-  } 
-  else if((which_dev = devintr()) != 0){
+  } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    uint64 va = r_stval();   
+    if ((r_scause() == 15 || r_scause() == 13) && va < TRAPFRAME && va >= p->cur_pos){
+      struct proc *p = myproc();
+      struct vma *mapping;
+      for (int i = 0; i < NMAPS; ++i) {
+        mapping = &p->maps[i];
+        if (va >= mapping->addr && va < mapping->addr + mapping->length) {
+          break;
+        }
+      }
+      uint64 pa = (uint64)kalloc();
+      if (pa == 0){
+        p->killed = 1;
+        goto check;
+      } 
+      va = PGROUNDDOWN(va);
+      long pte_privilege = readfile2pg(va,pa,mapping);
+      if (mappages(p->pagetable, va, PGSIZE, pa, pte_privilege) < 0) {
+        p->killed = 1;
+        kfree((void *)pa);
+      }
+    }else{
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
 check:
